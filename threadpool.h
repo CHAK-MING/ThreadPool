@@ -1,5 +1,9 @@
 #pragma once
 
+/*
+	ç‰ˆæœ¬ä¸€
+*/
+
 #include <iostream>
 #include <vector>
 #include <queue>
@@ -9,12 +13,15 @@
 #include <condition_variable>
 #include <thread>
 #include <functional>
+#include <unordered_map>
 
-const int TASK_MAX_THRESHHOLD = 1024;
-const int THREAD_MAX_SIZE = \
+const int TASK_MAX_THRESHHOLD = INT32_MAX;
+const int THREAD_SIZE = \
 	std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 4;
+const int THREAD_MAX_THRESHHOLD = THREAD_SIZE * 10;
+const int THREAD_MAX_IDLE_TIME = 60; // å•ä½:ç§’
 
-// AnyÀàĞÍ£º¿ÉÒÔ½ÓÊÜÈÎÒâÀàĞÍµÄÊı¾İ
+// Anyç±»å‹ï¼šå¯ä»¥æ¥å—ä»»æ„ç±»å‹çš„æ•°æ®
 class Any
 {
 public:
@@ -32,11 +39,11 @@ public:
 		: base_(std::make_unique<Derive<T>>(data))
 	{}
 
-	// »ñÈ¡AnyµÄdataÊı¾İ
+	// è·å–Anyçš„dataæ•°æ®
 	template<typename T>
 	T cast_()
 	{
-		Derive<T>* pd = dynamic_cast<Derive<T>*>(base_->get());
+		Derive<T>* pd = dynamic_cast<Derive<T>*>(base_.get());
 		if (pd == nullptr)
 		{
 			throw "type is unmatch!";
@@ -50,7 +57,7 @@ private:
 		virtual ~Base() = default;
 	};
 
-	// ÅÉÉúÀàÀàĞÍ
+	// æ´¾ç”Ÿç±»ç±»å‹
 	template<typename T>
 	class Derive : public Base
 	{
@@ -62,17 +69,24 @@ private:
 	std::unique_ptr<Base> base_;
 };
 
-// ĞÅºÅÁ¿
+// ä¿¡å·é‡
 class Semaphore
 {
 public:
 	Semaphore(int limit = 0)
 		: resLimit_(limit)
+		, isExit_(false)
 	{}
-	~Semaphore() = default;
+	~Semaphore()
+	{
+		isExit_ = true;
+	}
 
 	void wait()
 	{
+		// å¦‚æœå½“å‰çš„çº¿ç¨‹é‡èµ„æºå·²ç»è¢«å›æ”¶ï¼Œå°±ç›´æ¥è¿”å›
+		if (isExit_)
+			return;
 		std::unique_lock<std::mutex> lock(mtx_);
 		cond_.wait(lock, [&]() -> bool {
 			return resLimit_ > 0;
@@ -82,6 +96,8 @@ public:
 
 	void post()
 	{
+		if (isExit_)
+			return;
 		std::unique_lock<std::mutex> lock(mtx_);
 		resLimit_++;
 		cond_.notify_all();
@@ -92,10 +108,11 @@ private:
 
 	std::mutex mtx_;
 	std::condition_variable cond_;
+	std::atomic_bool isExit_; // å› ä¸ºåœ¨linuxä¸­ï¼Œæ¡ä»¶å˜é‡å’Œäº’æ–¥é‡çš„èµ„æºä¸ä¼šåœ¨ææ„å‡½æ•°ä¸­å°±å»é‡Šæ”¾å…¶èµ„æºï¼Œè®¾ç½®æ˜¯å¦é€€å‡º
 };
 
 class Task;
-// ÊµÏÖ½ÓÊÜÌá½»µ½Ïß³Ì³ØµÄtaskÈÎÎñÖ´ĞĞÍê³ÉºóµÄ·µ»ØÖµÀàĞÍ
+// å®ç°æ¥å—æäº¤åˆ°çº¿ç¨‹æ± çš„taskä»»åŠ¡æ‰§è¡Œå®Œæˆåçš„è¿”å›å€¼ç±»å‹
 class Result
 {
 public:
@@ -106,81 +123,102 @@ public:
 
 	Any get();
 private:
-	Any any_;		// ´æ´¢ÈÎÎñµÄ·µ»ØÖµ
-	Semaphore sem_; // Ïß³ÌÍ¨ĞÅĞÅºÅÁ¿
-	std::shared_ptr<Task> task_; // Ö¸Ïò¶ÔÓ¦»ñÈ¡·µ»ØÖµµÄÈÎÎñ¶ÔÏó
-	std::atomic_bool isValid_; // ·µ»ØÖµÊÇ·ñÓĞĞ§
+	Any any_;		// å­˜å‚¨ä»»åŠ¡çš„è¿”å›å€¼
+	Semaphore sem_; // çº¿ç¨‹é€šä¿¡ä¿¡å·é‡
+	std::shared_ptr<Task> task_; // æŒ‡å‘å¯¹åº”è·å–è¿”å›å€¼çš„ä»»åŠ¡å¯¹è±¡
+	std::atomic_bool isValid_; // è¿”å›å€¼æ˜¯å¦æœ‰æ•ˆ
 };
 
-// ÈÎÎñ³éÏó»ùÀà
+// ä»»åŠ¡æŠ½è±¡åŸºç±»
 class Task
 {
 public:
+	Task() = default;
+	~Task() = default;
 	void exec();
-	// ÓÃ»§¿ÉÒÔ×Ô¶¨ÒåÈÎÒâÀàĞÍµÄÈÎÎñ£¬´ÓTask¼Ì³Ğ£¬ÖØĞ´run·½·¨
+	void setResult(Result* res);
+	// ç”¨æˆ·å¯ä»¥è‡ªå®šä¹‰ä»»æ„ç±»å‹çš„ä»»åŠ¡ï¼Œä»Taskç»§æ‰¿ï¼Œé‡å†™runæ–¹æ³•
 	virtual Any run() = 0; 
+private:
+	Result* result_ = nullptr;
 };
 
-// Ïß³Ì³ØÖ§³ÖµÄÄ£Ê½
+// çº¿ç¨‹æ± æ”¯æŒçš„æ¨¡å¼
 enum class PoolMode
 {
-	MODE_FIXED, // ¹Ì¶¨ÊıÁ¿µÄÏß³Ì³Ø
-	MODE_CACHED // Ïß³ÌÊıÁ¿¿ÉÒÔ¶¯Ì¬Ôö³¤
+	MODE_FIXED, // å›ºå®šæ•°é‡çš„çº¿ç¨‹æ± 
+	MODE_CACHED // çº¿ç¨‹æ•°é‡å¯ä»¥åŠ¨æ€å¢é•¿
 };
 
-// Ïß³ÌÀàĞÍ
+// çº¿ç¨‹ç±»å‹
 class Thread
 {
 public:
-	// Ïß³Ìº¯Êı¶ÔÏóÀàĞÍ
-	using ThreadFunc = std::function<void()>;
+	// çº¿ç¨‹å‡½æ•°å¯¹è±¡ç±»å‹
+	using ThreadFunc = std::function<void(int)>;
 
 	Thread(ThreadFunc func);
 	~Thread();
 
+	// å¯åŠ¨çº¿ç¨‹
 	void start();
+
+	// è·å–çº¿ç¨‹id
+	int getId() const;
 private:
 	ThreadFunc func_;
+	static int generateId_;
+	int threadId_;			// ä¿å­˜çº¿ç¨‹id
 };
 
-// Ïß³Ì³ØÀàĞÍ
+// çº¿ç¨‹æ± ç±»å‹
 class ThreadPool
 {
 public:
 	ThreadPool();
 	~ThreadPool();
 
-	// ÉèÖÃÏß³Ì³ØµÄ¹¤×÷Ä£Ê½
+	// è®¾ç½®çº¿ç¨‹æ± çš„å·¥ä½œæ¨¡å¼
 	void setMode(PoolMode mode);
 
-	// ÉèÖÃtaskÈÎÎñ¶ÓÁĞÉÏÏŞãĞÖµ
+	// è®¾ç½®çº¿ç¨‹æ± cachedæ¨¡å¼ä¸‹çº¿ç¨‹é˜ˆå€¼
+	void setThreadMaxThreshHold(int threshhold);
+
+	// è®¾ç½®taskä»»åŠ¡é˜Ÿåˆ—ä¸Šé™é˜ˆå€¼
 	void setTaskQueMaxThreshHold(int threshhold);
 
-	// ¸øÏß³Ì³ØÌá½»ÈÎÎñ
+	// ç»™çº¿ç¨‹æ± æäº¤ä»»åŠ¡
 	Result submitTask(std::shared_ptr<Task> sp);
 
-	// ¿ªÆôÏß³Ì³Ø
-	void start(int initThreadSize = THREAD_MAX_SIZE);
+	// å¼€å¯çº¿ç¨‹æ± 
+	void start(int initThreadSize = THREAD_SIZE);
 
-	// ½ûÖ¹¿½±´ºÍ¸³Öµ
+	// ç¦æ­¢æ‹·è´å’Œèµ‹å€¼
 	ThreadPool(const ThreadPool&) = delete;
 	ThreadPool& operator=(const ThreadPool&) = delete;
 
 private:
-	// ¶¨ÒåÏß³Ìº¯Êı
-	void threadFunc();
+	// å®šä¹‰çº¿ç¨‹å‡½æ•°
+	void threadFunc(int threadId);
 
+	// æ£€æŸ¥poolçš„è¿è¡ŒçŠ¶æ€
+	bool checkRunningState() const;
 private:
-	std::vector<std::unique_ptr<Thread>> threads_;				// Ïß³ÌÁĞ±í
-	size_t initThreadSize_;						// ³õÊ¼µÄÏß³ÌÊıÁ¿
+	std::unordered_map<int, std::unique_ptr<Thread>> threads_;		// çº¿ç¨‹åˆ—è¡¨
+	size_t initThreadSize_;											// åˆå§‹çš„çº¿ç¨‹æ•°é‡
+	std::atomic_int curThreadSize_;									// è®°å½•å½“å‰çº¿ç¨‹æ± çš„çº¿ç¨‹æ•°é‡
+	std::atomic_int idleThreadSize_;								// ç©ºé—²çº¿ç¨‹çš„æ•°é‡
+	size_t threadMaxThreshHold_;									// çº¿ç¨‹æ•°é‡ä¸Šé™çš„é˜ˆå€¼
 	
-	std::queue<std::shared_ptr<Task>> taskQue_;	// ÈÎÎñ¶ÓÁĞ
-	std::atomic_uint taskSize_;					// ÈÎÎñµÄÊıÁ¿
-	size_t taskQueMaxThreshHold_;				// ÈÎÎñÊıÁ¿ÉÏÏŞµÄãĞÖµ
+	std::queue<std::shared_ptr<Task>> taskQue_;						// ä»»åŠ¡é˜Ÿåˆ—
+	std::atomic_uint taskSize_;										// ä»»åŠ¡çš„æ•°é‡
+	size_t taskQueMaxThreshHold_;									// ä»»åŠ¡æ•°é‡ä¸Šé™çš„é˜ˆå€¼
 
-	std::mutex taskQueMtx_;						// ±£Ö¤ÈÎÎñ¶ÓÁĞµÄÏß³Ì°²È«
-	std::condition_variable notFull_;			// ±£Ö¤ÈÎÎñ¶ÓÁĞ²»Âú
-	std::condition_variable notEmpty_;			// ±£Ö¤ÈÎÎñ¶ÓÁĞ²»¿Õ
+	std::mutex taskQueMtx_;											// ä¿è¯ä»»åŠ¡é˜Ÿåˆ—çš„çº¿ç¨‹å®‰å…¨
+	std::condition_variable notFull_;								// ä¿è¯ä»»åŠ¡é˜Ÿåˆ—ä¸æ»¡
+	std::condition_variable notEmpty_;								// ä¿è¯ä»»åŠ¡é˜Ÿåˆ—ä¸ç©º
+	std::condition_variable exitCond_;								// ä¿è¯çº¿ç¨‹èµ„æºå…¨éƒ¨å›æ”¶
 
-	PoolMode poolMode_;							// µ±Ç°Ïß³Ì³ØµÄ¹¤×÷Ä£Ê½
+	PoolMode poolMode_;												// å½“å‰çº¿ç¨‹æ± çš„å·¥ä½œæ¨¡å¼
+	std::atomic_bool isPoolRunning_;								// è¡¨ç¤ºçº¿ç¨‹æ± çš„å¯åŠ¨çŠ¶æ€
 };
